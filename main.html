@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Cyber Clash Arena</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; overflow: hidden;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: black;
+    color: white;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  canvas {
+    display: block;
+    margin: 0 auto;
+    background: radial-gradient(ellipse at center, #111 0%, #000 100%);
+  }
+  #ui {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    font-size: 1.2em;
+    color: #f0f0f0;
+    z-index: 10;
+    line-height: 1.6em;
+    background: rgba(0,0,0,0.6);
+    padding: 10px;
+    border-radius: 12px;
+    border: 1px solid rgba(255,255,255,0.2);
+    box-shadow: 0 0 15px rgba(0,255,255,0.3);
+  }
+  #ui div {
+    text-shadow: 1px 1px 2px black;
+  }
+  #chatBox {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    background: rgba(0, 0, 0, 0.8);
+    display: none;
+    z-index: 20;
+    padding: 5px;
+    box-sizing: border-box;
+  }
+  #chatInput {
+    width: 90%;
+    height: 32px;
+    font-size: 1em;
+    padding: 5px;
+    border: none;
+    border-radius: 4px;
+  }
+  #gameOverScreen {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.9);
+    color: white;
+    display: none;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    font-size: 2em;
+    z-index: 50;
+  }
+  #gameOverScreen h1 {
+    font-size: 3em;
+    color: #ff4d4d;
+    text-shadow: 0 0 15px #ff4d4d;
+  }
+  #playAgainButton {
+    padding: 15px 30px;
+    font-size: 1em;
+    cursor: pointer;
+    background: #00bfff;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    margin-top: 20px;
+    box-shadow: 0 0 10px rgba(0,191,255,0.5);
+    transition: transform 0.2s;
+  }
+  #playAgainButton:hover {
+    transform: scale(1.05);
+  }
+</style>
+</head>
+<body>
+
+<canvas id="game"></canvas>
+
+<div id="ui">
+  <div id="money">💰: 0</div>
+  <div id="weapon">Weapon: None</div>
+  <div id="rarity">Rarity: -</div>
+  <div id="weaponInfo">Power: 1 | Fire Rate: 1</div>
+  <hr style="border: 1px solid #444; margin: 8px 0;">
+  <div id="upgradeWeapon">
+    <button id="upgradeButton" disabled>Upgrade (Cost: $100)</button>
+  </div>
+  <div id="score">Score: 0</div>
+  <div id="xp">XP: 0 / 100</div>
+  <div id="level">Level: 1</div>
+  <div id="owner" style="color: gold; display: none;">👑 Owner Mode Active</div>
+  <div style="margin-top:8px; font-size: 0.85em; color: #aaa;">
+    Controls: A=Shoot | B=Dash | X=Chat | Y=Upgrade Weapon | L-Shoulder=Roll | DPad/LS=Move | Start=Owner
+  </div>
+</div>
+
+<div id="chatBox">
+  <input type="text" id="chatInput" placeholder="Type your message and press Enter" autocomplete="off" />
+</div>
+
+<div id="gameOverScreen">
+  <h1>GAME OVER</h1>
+  <p>Your final score: <span id="finalScore">0</span></p>
+  <button id="playAgainButton">Play Again</button>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  let w = canvas.width = window.innerWidth;
+  let h = canvas.height = window.innerHeight;
+
+  const rarities = ["Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic", "Rainbow"];
+  const rarityColors = ["#aaa", "#00ff00", "#00bfff", "#8a2be2", "#ff8c00", "#ff00ff", "#ff007f"];
+  
+  // Audio
+  const soundShoot = new Audio('https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3'); // Placeholder sound
+  const soundEnemyExplode = new Audio('https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3'); // Placeholder sound
+  const soundDamage = new Audio('https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3'); // Placeholder sound
+  soundShoot.volume = 0.2;
+  soundEnemyExplode.volume = 0.5;
+  soundDamage.volume = 0.7;
+
+  // Game state
+  let money = 0, score = 0, xp = 0, level = 1, rarityIndex = 0, owner = false;
+  let weaponPower = 1;
+  let weaponFireRate = 1; // Lower is faster
+  let lastShotTime = 0;
+  let weapon = "None";
+  let player = {
+    x: w/2, y: h - 80, size: 20, speed: 5, health: 100, maxHealth: 100, vx: 0, vy: 0,
+    isDashing: false, dashDuration: 200, dashCooldown: 1000, lastDashTime: 0
+  };
+  let enemies = [];
+  let bullets = [];
+  let wave = 1;
+  let bossActive = false;
+  let chatVisible = false;
+  let gameOver = false;
+
+  // UI refs
+  const uiMoney = document.getElementById('money');
+  const uiWeapon = document.getElementById('weapon');
+  const uiRarity = document.getElementById('rarity');
+  const uiWeaponInfo = document.getElementById('weaponInfo');
+  const uiScore = document.getElementById('score');
+  const uiXP = document.getElementById('xp');
+  const uiLevel = document.getElementById('level');
+  const uiOwner = document.getElementById('owner');
+  const chatBox = document.getElementById('chatBox');
+  const chatInput = document.getElementById('chatInput');
+  const gameOverScreen = document.getElementById('gameOverScreen');
+  const finalScoreSpan = document.getElementById('finalScore');
+  const playAgainButton = document.getElementById('playAgainButton');
+  const upgradeButton = document.getElementById('upgradeButton');
+
+  // Helper functions
+  function updateUI() {
+    uiMoney.textContent = `💰: ${money}`;
+    uiWeapon.textContent = `Weapon: ${weapon}`;
+    uiRarity.textContent = `Rarity: ${rarities[rarityIndex] || '-'}`;
+    uiRarity.style.color = rarityColors[rarityIndex] || 'white';
+    uiWeaponInfo.textContent = `Power: ${weaponPower} | Fire Rate: ${1000 / weaponFireRate} shots/s`;
+    uiScore.textContent = `Score: ${score}`;
+    uiXP.textContent = `XP: ${xp} / ${100 * level}`;
+    uiLevel.textContent = `Level: ${level}`;
+    uiOwner.style.display = owner ? 'block' : 'none';
+    
+    // Upgrade button logic
+    const upgradeCost = (weaponPower + weaponFireRate) * 50;
+    upgradeButton.textContent = `Upgrade (Cost: $${upgradeCost})`;
+    upgradeButton.disabled = money < upgradeCost;
+  }
+
+  function saveGame() {
+    const saveData = {
+      money, score, xp, level, rarityIndex, owner, weaponPower, weaponFireRate, weapon, playerHealth: player.health
+    };
+    localStorage.setItem('cyberClashSave', JSON.stringify(saveData));
+  }
+
+  function loadGame() {
+    let data = localStorage.getItem('cyberClashSave');
+    if(data) {
+      let s = JSON.parse(data);
+      money = s.money || 0;
+      score = s.score || 0;
+      xp = s.xp || 0;
+      level = s.level || 1;
+      rarityIndex = s.rarityIndex || 0;
+      owner = s.owner || false;
+      weaponPower = s.weaponPower || 1;
+      weaponFireRate = s.weaponFireRate || 300; // Default fire rate
+      weapon = s.weapon || "None";
+      player.health = s.playerHealth || 100;
+    }
+  }
+
+  function rollWeapon() {
+    if(money < 100) return;
+    money -= 100;
+    let roll = Math.random();
+    if(roll > 0.99) rarityIndex = 6;
+    else if(roll > 0.95) rarityIndex = 5;
+    else if(roll > 0.85) rarityIndex = 4;
+    else if(roll > 0.7) rarityIndex = 3;
+    else if(roll > 0.5) rarityIndex = 2;
+    else if(roll > 0.25) rarityIndex = 1;
+    else rarityIndex = 0;
+    weapon = `${rarities[rarityIndex]} Blaster`;
+    weaponPower = rarityIndex + 1;
+    weaponFireRate = 300 - (rarityIndex * 30); // Faster fire rate for higher rarities
+    updateUI();
+    saveGame();
+  }
+  
+  function upgradeWeapon() {
+      const upgradeCost = (weaponPower + weaponFireRate) * 50;
+      if (money < upgradeCost) return;
+      money -= upgradeCost;
+      weaponPower++;
+      weaponFireRate = Math.max(100, weaponFireRate - 10); // Don't let fire rate get too fast
+      updateUI();
+      saveGame();
+  }
+
+  function gainXP(amount) {
+    xp += amount;
+    while(xp >= 100 * level) {
+      xp -= 100 * level;
+      level++;
+    }
+  }
+
+  function spawnEnemy(isBoss = false) {
+    const size = isBoss ? 60 : 20 + Math.random() * 15;
+    const speed = isBoss ? 1 : 1 + Math.random() * 2; // Varied enemy speed
+    const health = isBoss ? 50 + 25 * level : 5 + 5 * level;
+    const x = Math.random() * (w - size * 2) + size;
+    const y = -size;
+    const type = Math.random() > 0.8 ? 'fast' : 'standard'; // Simple enemy variants
+    enemies.push({x, y, size, speed: speed * (type === 'fast' ? 1.5 : 1), health, isBoss, type});
+  }
+
+  function spawnWave() {
+    const enemyCount = 5 + wave * 2;
+    for(let i=0; i<enemyCount; i++) {
+      setTimeout(() => spawnEnemy(false), i * 500); // Stagger enemy spawning
+    }
+    if(wave % 5 === 0) {
+      setTimeout(() => {
+        spawnEnemy(true);
+        bossActive = true;
+      }, enemyCount * 500);
+    }
+  }
+
+  function shootBullet() {
+    if (Date.now() - lastShotTime < weaponFireRate) return;
+    soundShoot.currentTime = 0;
+    soundShoot.play();
+    bullets.push({
+      x: player.x,
+      y: player.y - player.size,
+      vy: -10,
+      power: weaponPower,
+      size: 8,
+    });
+    lastShotTime = Date.now();
+  }
+  
+  function dash() {
+      if (Date.now() - player.lastDashTime < player.dashCooldown) return;
+      player.isDashing = true;
+      player.lastDashTime = Date.now();
+      setTimeout(() => { player.isDashing = false; }, player.dashDuration);
+  }
+
+  function circleCollide(a, b) {
+    const dx = a.x - b.x;
+    const dy = a.y - b.y;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    return dist < a.size + b.size;
+  }
+
+  function handleKill(enemy) {
+    score++;
+    money += weaponPower * (enemy.isBoss ? 50 : 5);
+    gainXP(enemy.isBoss ? 50 : 10);
+    soundEnemyExplode.currentTime = 0;
+    soundEnemyExplode.play();
+  }
+
+  function gameOverState() {
+      gameOver = true;
+      finalScoreSpan.textContent = score;
+      gameOverScreen.style.display = 'flex';
+      saveGame();
+  }
+
+  function resetGame() {
+    gameOver = false;
+    gameOverScreen.style.display = 'none';
+    money = 0; score = 0; xp = 0; level = 1;
+    rarityIndex = 0; weaponPower = 1; weaponFireRate = 300;
+    weapon = 'None';
+    player.health = player.maxHealth;
+    enemies = [];
+    bullets = [];
+    wave = 1;
+    bossActive = false;
+    spawnWave();
+    updateUI();
+  }
+
+  // Gamepad & keyboard input state
+  let keys = {};
+  let gamepadConnected = false;
+  let buttonStates = {};
+
+  window.addEventListener('keydown', e => {
+    keys[e.key.toLowerCase()] = true;
+    if(e.key === "Enter" && chatVisible) {
+      const val = chatInput.value.trim();
+      if(val) {
+        if(val.toLowerCase() === "owner123") {
+          owner = true;
+          money += 10000;
+          updateUI();
+        }
+      }
+      chatInput.value = '';
+      toggleChat(false);
+    }
+  });
+  window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+  function toggleChat(show) {
+    chatVisible = show;
+    chatBox.style.display = show ? 'block' : 'none';
+    if(show) chatInput.focus();
+  }
+
+  window.addEventListener('gamepadconnected', e => {
+    gamepadConnected = true;
+    console.log('Gamepad connected:', e.gamepad.id);
+  });
+  window.addEventListener('gamepaddisconnected', e => {
+    gamepadConnected = false;
+    console.log('Gamepad disconnected');
+  });
+
+  // Event Listeners
+  upgradeButton.addEventListener('click', upgradeWeapon);
+  playAgainButton.addEventListener('click', resetGame);
+  
+  // Main update loop
+  function update() {
+    if(gameOver) return;
+
+    // Handle input
+    let gp = navigator.getGamepads()[0];
+
+    // Movement
+    player.vx = 0;
+    player.vy = 0;
+    if(gp) {
+      const sensitivity = 0.5;
+      if (Math.abs(gp.axes[0]) > sensitivity) player.vx = gp.axes[0] * player.speed;
+      if (Math.abs(gp.axes[1]) > sensitivity) player.vy = gp.axes[1] * player.speed;
+
+      // Buttons
+      if(gp.buttons[0].pressed) shootBullet();                                  // A: shoot
+      if(gp.buttons[1].pressed && !buttonStates[1]) dash();                     // B: dash
+      if(gp.buttons[2].pressed && !buttonStates[2] && !chatVisible) toggleChat(true); // X: chat
+      if(gp.buttons[3].pressed && !buttonStates[3]) upgradeWeapon();            // Y: upgrade
+      if(gp.buttons[4].pressed && !buttonStates[4]) rollWeapon();               // Left Shoulder: roll
+      if(gp.buttons[9].pressed && !buttonStates[9] && !owner) {                // Start: owner login prompt
+        let pass = prompt("Enter Owner Password:");
+        if(pass === "owner123") {
+          owner = true;
+          money += 10000;
+          updateUI();
+        }
+      }
+      for(let i = 0; i < gp.buttons.length; i++) {
+        buttonStates[i] = gp.buttons[i].pressed;
+      }
+
+    } else {
+      // Keyboard WASD or arrows
+      if(keys['arrowleft'] || keys['a']) player.vx = -player.speed;
+      if(keys['arrowright'] || keys['d']) player.vx = player.speed;
+      if(keys['arrowup'] || keys['w']) player.vy = -player.speed;
+      if(keys['arrowdown'] || keys['s']) player.vy = player.speed;
+
+      if(keys[' ']) shootBullet();
+      if(keys['r']) rollWeapon();
+      if(keys['enter'] && !chatVisible) toggleChat(true);
+      if(keys['e']) upgradeWeapon();
+      if(keys['shift'] && !player.isDashing) dash();
+      if(keys['p'] && !owner) {
+        let pass = prompt("Enter Owner Password:");
+        if(pass === "owner123") {
+          owner = true;
+          money += 10000;
+          updateUI();
+        }
+      }
+    }
+
+    // Move player and clamp to screen
+    const dashSpeed = player.isDashing ? player.speed * 3 : player.speed;
+    player.x += player.vx ? (player.vx > 0 ? dashSpeed : -dashSpeed) : 0;
+    player.y += player.vy ? (player.vy > 0 ? dashSpeed : -dashSpeed) : 0;
+    
+    player.x = Math.min(Math.max(player.size, player.x), w - player.size);
+    player.y = Math.min(Math.max(player.size, player.y), h - player.size);
+
+    // Update player health
+    if (player.health < player.maxHealth) {
+        player.health += 0.05; // Passive regeneration
+        player.health = Math.min(player.health, player.maxHealth);
+    }
+    
+    // Update bullets
+    bullets.forEach((b,i) => {
+      b.y += b.vy;
+      if(b.y < 0) bullets.splice(i,1);
+    });
+
+    // Update enemies
+    enemies.forEach((e,i) => {
+      e.y += e.speed;
+
+      // Enemy collision with player
+      if (circleCollide(player, e) && !player.isDashing) {
+        player.health -= e.isBoss ? 30 : 10;
+        soundDamage.currentTime = 0;
+        soundDamage.play();
+        enemies.splice(i,1);
+        if(player.health <= 0) {
+            gameOverState();
+            return;
+        }
+      }
+    });
+
+    // Bullet collisions with enemies
+    bullets.forEach((b, bi) => {
+      enemies.forEach((e, ei) => {
+        if(circleCollide(b,e)) {
+          e.health -= b.power;
+          bullets.splice(bi,1);
+          if(e.health <= 0) {
+            handleKill(e);
+            enemies.splice(ei,1);
+            if(e.isBoss) {
+              bossActive = false;
+              wave++;
+              spawnWave();
+            }
+          }
+        }
+      });
+    });
+
+    // Spawn enemies if none and no boss
+    if(enemies.length === 0 && !bossActive) {
+      wave++;
+      spawnWave();
+    }
+
+    updateUI();
+    saveGame();
+  }
+
+  // Draw loop
+  function draw() {
+    ctx.clearRect(0,0,w,h);
+
+    // Player
+    ctx.fillStyle = owner ? 'gold' : player.isDashing ? '#00bfff' : 'white';
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, player.size, 0, Math.PI*2);
+    ctx.fill();
+
+    // Player health bar
+    ctx.fillStyle = 'rgba(255,0,0,0.5)';
+    ctx.fillRect(player.x - 30, player.y + player.size + 10, 60, 6);
+    ctx.fillStyle = 'lime';
+    ctx.fillRect(player.x - 30, player.y + player.size + 10, 60 * (player.health/player.maxHealth), 6);
+
+    // Bullets
+    bullets.forEach(b => {
+      ctx.fillStyle = rarityColors[rarityIndex];
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.size, 0, Math.PI*2);
+      ctx.fill();
+    });
+
+    // Enemies
+    enemies.forEach(e => {
+      ctx.fillStyle = e.isBoss ? 'orange' : e.type === 'fast' ? '#ff4d4d' : 'red';
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, e.size, 0, Math.PI*2);
+      ctx.fill();
+    });
+
+    requestAnimationFrame(draw);
+  }
+
+  // Start wave on load
+  spawnWave();
+  loadGame();
+  updateUI();
+
+  // Game loops
+  function gameLoop() {
+    update();
+    requestAnimationFrame(gameLoop);
+  }
+
+  gameLoop();
+  draw();
+
+  // Resize handling
+  window.addEventListener('resize', () => {
+    w = canvas.width = window.innerWidth;
+    h = canvas.height = window.innerHeight;
+  });
+
+})();
+</script>
+
+</body>
+</html>
